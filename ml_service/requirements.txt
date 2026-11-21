@@ -1,0 +1,8 @@
+Flask
+Flask-Cors
+python-dotenv
+requests
+joblib
+scikit-learn==1.6.1
+pandas
+numpy
