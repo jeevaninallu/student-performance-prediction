@@ -5,6 +5,7 @@ import pandas as pd
 
 from flask import Flask, request, jsonify
 from dotenv import load_dotenv
+from functools import wraps
 
 load_dotenv()
 
@@ -44,6 +45,23 @@ FEATURES = [
     "Gender"
 ]
 
+def require_service_key():
+    expected_key = os.getenv("ML_SERVICE_API_KEY")
+
+    def decorator(view_function):
+        @wraps(view_function)
+        def wrapped(*args, **kwargs):
+            provided_key = request.headers.get("x-ml-service-key")
+
+            if not expected_key or provided_key != expected_key:
+                return jsonify({"error": "Unauthorized service request"}), 401
+
+            return view_function(*args, **kwargs)
+
+        return wrapped
+
+    return decorator
+
 
 @app.route("/health", methods=["GET"])
 def health():
@@ -54,6 +72,7 @@ def health():
 
 
 @app.route("/predict", methods=["POST"])
+@require_service_key()
 def predict():
 
     try:

@@ -7,6 +7,7 @@ const cors = require("cors");
 const helmet = require("helmet");
 const authRoutes = require("./routes/authRoutes");
 const cookieParser = require("cookie-parser");
+const predictionRoutes = require("./routes/predictionRoutes");
 
 const app = express();
 
@@ -25,6 +26,9 @@ app.use(cookieParser());
 
 // Authentication routes
 app.use("/api/auth", authRoutes);
+
+// Prediction routes
+app.use("/api/predictions", predictionRoutes);
 
 // Health check endpoint
 app.get("/api/health", (req, res) => {

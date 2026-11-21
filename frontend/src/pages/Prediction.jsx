@@ -1,6 +1,15 @@
 
 import { useState } from "react";
-import { GraduationCap, BookOpen, Users, HeartPulse } from "lucide-react";
+import {
+  GraduationCap,
+  BookOpen,
+  Users,
+  HeartPulse,
+  LoaderCircle,
+  TrendingUp,
+} from "lucide-react";
+import api from "../services/api";
+import { useAuth } from "../context/AuthContext";
 import "./Prediction.css";
 
 const initialValues = {
@@ -24,6 +33,15 @@ const initialValues = {
   Parental_Education_Level: "",
   Distance_from_Home: "",
 };
+
+const numericFields = [
+  "Hours_Studied",
+  "Attendance",
+  "Previous_Scores",
+  "Tutoring_Sessions",
+  "Sleep_Hours",
+  "Physical_Activity",
+];
 
 const sections = [
   {
@@ -117,23 +135,80 @@ const sections = [
 ];
 
 function Prediction() {
+  const { accessToken } = useAuth();
+
   const [formData, setFormData] = useState(initialValues);
   const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [prediction, setPrediction] = useState(null);
 
   const handleChange = (e) => {
-    setFormData({
-      ...formData,
+    setFormData((previous) => ({
+      ...previous,
       [e.target.name]: e.target.value,
-    });
+    }));
+
     setMessage("");
+    setPrediction(null);
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
 
-    setMessage(
-      "Your information has been collected. ML prediction will be connected later."
+    setMessage("");
+    setPrediction(null);
+
+    if (!accessToken) {
+      setMessage("Your session has expired. Please log in again.");
+      return;
+    }
+
+    // Convert numeric form values from strings to numbers.
+    const payload = Object.fromEntries(
+      Object.entries(formData).map(([key, value]) => [
+        key,
+        numericFields.includes(key) ? Number(value) : value,
+      ])
     );
+
+    try {
+      setLoading(true);
+
+      const response = await api.post("/predictions", payload, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+
+      setPrediction(response.data.prediction);
+      setMessage("Your prediction has been generated successfully!");
+    } catch (error) {
+      const responseMessage = error.response?.data?.message;
+
+      if (error.response?.status === 401) {
+        setMessage("Your session has expired. Please log in again.");
+      } else if (error.response?.status === 400) {
+        setMessage(responseMessage || "Please check your input values.");
+      } else {
+        setMessage(
+          responseMessage ||
+            "Unable to generate prediction. Please try again."
+        );
+      }
+
+      console.error(
+        "Prediction request failed:",
+        error.response?.data || error.message
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleClear = () => {
+    setFormData(initialValues);
+    setMessage("");
+    setPrediction(null);
   };
 
   return (
@@ -182,6 +257,7 @@ function Prediction() {
                         value={formData[field.name]}
                         onChange={handleChange}
                         required
+                        disabled={loading}
                       >
                         <option value="">Select {field.label}</option>
 
@@ -194,16 +270,16 @@ function Prediction() {
                     ) : (
                       <input
                         id={field.name}
-                            name={field.name}
-                            type={field.type}
-                            min={field.min}
-                            max={field.max}
-                            step="any"
-                            placeholder={`Enter ${field.label.toLowerCase()}`}
-                            value={formData[field.name]}
-                            onChange={handleChange}
-                        
+                        name={field.name}
+                        type={field.type}
+                        min={field.min}
+                        max={field.max}
+                        step="any"
+                        placeholder={`Enter ${field.label.toLowerCase()}`}
+                        value={formData[field.name]}
+                        onChange={handleChange}
                         required
+                        disabled={loading}
                       />
                     )}
                   </div>
@@ -219,20 +295,54 @@ function Prediction() {
           </div>
         )}
 
+        {prediction && (
+          <div className="prediction-result">
+            <div className="result-heading">
+              <TrendingUp size={25} />
+              <h2>Prediction Result</h2>
+            </div>
+
+            <div className="result-cards">
+              <div className="result-card">
+                <span>Predicted Exam Score</span>
+                <strong>{prediction.predictedScore.toFixed(2)}</strong>
+                <small>Out of 100</small>
+              </div>
+
+              <div className="result-card">
+                <span>Performance Classification</span>
+                <strong className="classification-value">
+                  {prediction.classification}
+                </strong>
+                <small>Based on the classification model</small>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="prediction-actions">
           <button
             type="button"
             className="clear-button"
-            onClick={() => {
-              setFormData(initialValues);
-              setMessage("");
-            }}
+            onClick={handleClear}
+            disabled={loading}
           >
             Clear Form
           </button>
 
-          <button type="submit" className="predict-button">
-            Predict Performance
+          <button
+            type="submit"
+            className="predict-button"
+            disabled={loading}
+          >
+            {loading ? (
+              <>
+                <LoaderCircle size={18} className="loading-spinner" />
+                Generating Prediction...
+              </>
+            ) : (
+              "Predict Performance"
+            )}
           </button>
         </div>
       </form>

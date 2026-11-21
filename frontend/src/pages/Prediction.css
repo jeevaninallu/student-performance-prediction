@@ -1,9 +1,17 @@
 
+/* =========================================
+   PREDICTION PAGE CONTAINER
+========================================= */
+
 .prediction-container {
   max-width: 1200px;
   margin: 0 auto;
   color: #38291f;
 }
+
+/* =========================================
+   PAGE HEADING
+========================================= */
 
 .prediction-heading {
   display: flex;
@@ -47,6 +55,10 @@
   height: 75px;
 }
 
+/* =========================================
+   PREDICTION FORM SECTIONS
+========================================= */
+
 .prediction-section {
   background: #ffffff;
   padding: 27px;
@@ -79,6 +91,10 @@
   color: #8a7b71;
 }
 
+/* =========================================
+   FORM GRID
+========================================= */
+
 .prediction-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -108,6 +124,8 @@
   background: #fff;
   color: #40332b;
   font-size: 13px;
+  box-sizing: border-box;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .prediction-field input:focus,
@@ -120,6 +138,109 @@
   color: #ad9e94;
 }
 
+.prediction-field input:disabled,
+.prediction-field select:disabled {
+  background: #f7f4f1;
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+/* =========================================
+   PREDICTION MESSAGE
+========================================= */
+
+.prediction-message {
+  margin-top: 20px;
+  padding: 14px;
+  border-radius: 7px;
+  background: #f0e8df;
+  color: #70452f;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+/* =========================================
+   PREDICTION RESULT
+========================================= */
+
+.prediction-result {
+  margin-top: 28px;
+  padding: 24px;
+  background: #f8f5f0;
+  border: 1px solid #e8dfd3;
+  border-radius: 12px;
+  animation: result-appear 0.35s ease;
+}
+
+.result-heading {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 20px;
+  color: #795638;
+}
+
+.result-heading h2 {
+  margin: 0;
+  font-size: 21px;
+  color: #503626;
+}
+
+.result-cards {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.result-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 22px;
+  background: #ffffff;
+  border: 1px solid #eee5da;
+  border-radius: 10px;
+}
+
+.result-card span {
+  color: #80736a;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.result-card strong {
+  color: #795638;
+  font-size: 32px;
+  font-weight: 700;
+}
+
+.result-card small {
+  color: #998b80;
+  font-size: 12px;
+}
+
+.result-card .classification-value {
+  font-size: 22px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+@keyframes result-appear {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* =========================================
+   FORM ACTION BUTTONS
+========================================= */
+
 .prediction-actions {
   display: flex;
   justify-content: flex-end;
@@ -129,11 +250,15 @@
 
 .clear-button,
 .predict-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: 13px 22px;
   border-radius: 7px;
   font-weight: 600;
   cursor: pointer;
   font-size: 14px;
+  transition: background 0.2s ease, opacity 0.2s ease;
 }
 
 .clear-button {
@@ -148,24 +273,55 @@
   color: #fff;
 }
 
-.clear-button:hover {
+.clear-button:hover:not(:disabled) {
   background: #f2e9e2;
 }
 
-.predict-button:hover {
+.predict-button:hover:not(:disabled) {
   background: #583522;
 }
 
-.prediction-message {
-  margin-top: 20px;
-  padding: 14px;
-  border-radius: 7px;
-  background: #f0e8df;
-  color: #70452f;
-  font-size: 14px;
+.clear-button:disabled,
+.predict-button:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
+/* =========================================
+   LOADING SPINNER
+========================================= */
+
+.loading-spinner {
+  animation: prediction-spin 1s linear infinite;
+  vertical-align: middle;
+  margin-right: 7px;
+}
+
+@keyframes prediction-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* =========================================
+   RESPONSIVE DESIGN
+========================================= */
+
+@media (max-width: 900px) {
+  .prediction-heading h1 {
+    font-size: 26px;
+  }
+
+  .prediction-section {
+    padding: 22px;
+  }
 }
 
 @media (max-width: 650px) {
+  .prediction-heading {
+    align-items: flex-start;
+  }
+
   .prediction-heading h1 {
     font-size: 23px;
   }
@@ -182,7 +338,28 @@
     grid-template-columns: 1fr;
   }
 
+  .section-heading {
+    align-items: flex-start;
+  }
+
+  .section-heading h2 {
+    font-size: 16px;
+  }
+
+  .result-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .prediction-result {
+    padding: 18px;
+  }
+
   .prediction-actions {
     flex-direction: column-reverse;
+  }
+
+  .clear-button,
+  .predict-button {
+    width: 100%;
   }
 }
