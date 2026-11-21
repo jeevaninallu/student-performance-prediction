@@ -1,0 +1,40 @@
+
+.signup-wrapper {
+  max-width: 450px;
+}
+
+.signup-wrapper .brand-logo {
+  margin-bottom: 32px;
+}
+
+.signup-heading {
+  margin-bottom: 23px;
+}
+
+.signup-heading h1 {
+  font-size: 32px;
+}
+
+.signup-wrapper .auth-form {
+  gap: 15px;
+}
+
+.signup-wrapper .input-wrapper {
+  height: 47px;
+}
+
+.signup-wrapper .login-button {
+  margin-top: 5px;
+}
+
+.signup-error {
+  color: #c0392b;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+@media (max-width: 900px) {
+  .signup-wrapper .brand-logo {
+    margin-bottom: 30px;
+  }
+}
