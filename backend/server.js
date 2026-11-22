@@ -5,8 +5,9 @@ const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
 const helmet = require("helmet");
-const authRoutes = require("./routes/authRoutes");
 const cookieParser = require("cookie-parser");
+
+const authRoutes = require("./routes/authRoutes");
 const predictionRoutes = require("./routes/predictionRoutes");
 
 const app = express();
@@ -36,11 +37,13 @@ app.get("/api/health", (req, res) => {
     success: true,
     message: "Student Performance Prediction API is running",
     database:
-      mongoose.connection.readyState === 1 ? "Connected" : "Disconnected",
+      mongoose.connection.readyState === 1
+        ? "Connected"
+        : "Disconnected",
   });
 });
 
-// Connect to MongoDB and start server
+// Start backend server
 const PORT = process.env.PORT || 5000;
 
 async function startServer() {
@@ -58,4 +61,10 @@ async function startServer() {
   }
 }
 
-startServer();
+// Start server only when this file is executed directly.
+// Importing it in Jest will not start another server.
+if (require.main === module) {
+  startServer();
+}
+
+module.exports = { app, startServer };
