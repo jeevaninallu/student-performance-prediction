@@ -46,6 +46,7 @@ export function AuthProvider({ children }) {
     restoreSession();
   }, []);
 
+  // Existing email/password login
   const login = async (email, password) => {
     const response = await api.post("/auth/login", {
       email,
@@ -58,6 +59,64 @@ export function AuthProvider({ children }) {
     return response.data;
   };
 
+  // Existing Google ID-token login (preserved)
+  const googleLogin = async (idToken, linkingPassword = "") => {
+    const response = await api.post("/auth/google", {
+      idToken,
+      ...(linkingPassword ? { linkingPassword } : {}),
+    });
+
+    setAccessToken(response.data.accessToken);
+    setUser(response.data.user);
+
+    return response.data;
+  };
+
+  // New Google OAuth 2.0 authorization-code login
+  const googleOAuthLogin = async (code) => {
+    const response = await api.post(
+      "/auth/google/oauth",
+      { code },
+      {
+        headers: {
+          "X-Requested-With": "XMLHttpRequest",
+        },
+      }
+    );
+
+    // Save our application's access token and user
+    setAccessToken(response.data.accessToken);
+    setUser(response.data.user);
+
+    // Return complete response, including development demo token
+    return response.data;
+  };
+
+  // Link an existing password-based account with Google
+  const linkGoogleAccount = async (
+    pendingGoogleLinkToken,
+    linkingPassword
+  ) => {
+    const response = await api.post(
+      "/auth/google/oauth/link",
+      {
+        pendingGoogleLinkToken,
+        linkingPassword,
+      },
+      {
+        headers: {
+          "X-Requested-With": "XMLHttpRequest",
+        },
+      }
+    );
+
+    setAccessToken(response.data.accessToken);
+    setUser(response.data.user);
+
+    return response.data;
+  };
+
+  // Existing logout
   const logout = async () => {
     try {
       await api.post("/auth/logout");
@@ -75,6 +134,9 @@ export function AuthProvider({ children }) {
         authLoading,
         isAuthenticated: Boolean(user && accessToken),
         login,
+        googleLogin,
+        googleOAuthLogin,
+        linkGoogleAccount,
         logout,
       }}
     >

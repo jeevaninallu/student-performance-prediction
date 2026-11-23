@@ -1,17 +1,133 @@
 
 const express = require("express");
 const bcrypt = require("bcrypt");
+const axios = require("axios");
+const { OAuth2Client } = require("google-auth-library");
 const { z } = require("zod");
 const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
-const Session = require("../models/Session");
-const authMiddleware = require("../middleware/authMiddleware");
 
+const Session = require("../models/Session");
 const User = require("../models/User");
+const authMiddleware = require("../middleware/authMiddleware");
 
 const router = express.Router();
 
-// Signup validation
+// Google OAuth client
+const googleClient = new OAuth2Client(
+  process.env.GOOGLE_CLIENT_ID
+);
+
+// Google OAuth 2.0 Authorization Code client
+const googleOAuthClient = new OAuth2Client(
+  process.env.GOOGLE_CLIENT_ID,
+  process.env.GOOGLE_CLIENT_SECRET,
+  process.env.CLIENT_ORIGIN
+);
+// --------------------------------------------------
+// COMMON HELPER FUNCTIONS
+// --------------------------------------------------
+
+const hashRefreshToken = (token) =>
+  crypto.createHash("sha256").update(token).digest("hex");
+
+const generateAccessToken = (userId) => {
+  if (!process.env.JWT_ACCESS_SECRET) {
+    throw new Error("JWT_ACCESS_SECRET is not configured");
+  }
+
+  return jwt.sign(
+    { sub: userId.toString() },
+    process.env.JWT_ACCESS_SECRET,
+    { expiresIn: "5m" }
+  );
+};
+
+const createUserSession = async (userId, res) => {
+  const refreshToken = crypto.randomBytes(64).toString("hex");
+
+  const refreshTokenHash = hashRefreshToken(refreshToken);
+
+  await Session.create({
+    userId,
+    refreshTokenHash,
+  });
+
+  res.cookie("sp_refresh", refreshToken, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict",
+    path: "/api/auth",
+  });
+};
+
+// --------------------------------------------------
+// COMPLETE GOOGLE OAUTH LOGIN
+// --------------------------------------------------
+
+const completeGoogleOAuthLogin = async (
+  { googleId, email, fullName, linkingPassword },
+  res
+) => {
+  let user = await User.findOne({ googleId });
+
+  if (!user) {
+    user = await User.findOne({ email }).select("+passwordHash");
+
+    if (user) {
+      // Existing password account requires password verification
+      if (user.passwordHash) {
+        if (!linkingPassword) {
+          return {
+            requiresPasswordLink: true,
+            user: null,
+          };
+        }
+
+        const passwordMatches = await bcrypt.compare(
+          linkingPassword,
+          user.passwordHash
+        );
+
+        if (!passwordMatches) {
+          return {
+            invalidPassword: true,
+            user: null,
+          };
+        }
+      }
+
+      user.googleId = googleId;
+      await user.save();
+
+    } else {
+      user = await User.create({
+        fullName,
+        email,
+        googleId,
+        passwordHash: null,
+      });
+    }
+  }
+
+  const accessToken = generateAccessToken(user._id);
+
+  await createUserSession(user._id, res);
+
+  return {
+    success: true,
+    accessToken,
+    user: {
+      id: user._id,
+      fullName: user.fullName,
+      email: user.email,
+    },
+  };
+};
+// --------------------------------------------------
+// SIGNUP VALIDATION
+// --------------------------------------------------
+
 const signupSchema = z.object({
   fullName: z.string()
     .trim()
@@ -41,10 +157,12 @@ const signupSchema = z.object({
   }
 );
 
+// --------------------------------------------------
 // POST /api/auth/register
+// --------------------------------------------------
+
 router.post("/register", async (req, res) => {
   try {
-    // Validate request body
     const validation = signupSchema.safeParse(req.body);
 
     if (!validation.success) {
@@ -60,7 +178,6 @@ router.post("/register", async (req, res) => {
 
     const { fullName, email, password } = validation.data;
 
-    // Check whether the email already exists
     const existingUser = await User.findOne({ email });
 
     if (existingUser) {
@@ -70,10 +187,8 @@ router.post("/register", async (req, res) => {
       });
     }
 
-    // Hash password using bcrypt
     const passwordHash = await bcrypt.hash(password, 12);
 
-    // Create user
     const newUser = await User.create({
       fullName,
       email,
@@ -91,32 +206,12 @@ router.post("/register", async (req, res) => {
     });
 
   } catch (error) {
-    
-    
-    // Handle duplicate-key errors
     if (error.code === 11000) {
-    if (error.keyPattern?.email) {
-        return res.status(409).json({
+      return res.status(409).json({
         success: false,
         message: "An account with this email already exists",
-        });
+      });
     }
-
-    if (error.keyPattern?.googleId) {
-        return res.status(409).json({
-        success: false,
-        message: "This Google account is already registered",
-        });
-    }
-
-    console.error("Duplicate key error:", error.message);
-
-    return res.status(409).json({
-        success: false,
-        message: "A duplicate account detail was detected.",
-    });
-    }
-
 
     console.error("Registration error:", error.message);
 
@@ -127,13 +222,19 @@ router.post("/register", async (req, res) => {
   }
 });
 
+// --------------------------------------------------
+// LOGIN VALIDATION
+// --------------------------------------------------
 
 const loginSchema = z.object({
   email: z.string().trim().email("Enter a valid email address"),
   password: z.string().min(1, "Password is required"),
 });
 
+// --------------------------------------------------
 // POST /api/auth/login
+// --------------------------------------------------
+
 router.post("/login", async (req, res) => {
   try {
     const validation = loginSchema.safeParse(req.body);
@@ -148,7 +249,6 @@ router.post("/login", async (req, res) => {
     const email = validation.data.email.toLowerCase();
     const { password } = validation.data;
 
-    // Find account and explicitly include passwordHash
     const user = await User.findOne({ email }).select("+passwordHash");
 
     if (!user || !user.passwordHash) {
@@ -158,7 +258,6 @@ router.post("/login", async (req, res) => {
       });
     }
 
-    // Verify password
     const passwordMatches = await bcrypt.compare(
       password,
       user.passwordHash
@@ -171,40 +270,9 @@ router.post("/login", async (req, res) => {
       });
     }
 
-    // Check JWT secret
-    if (!process.env.JWT_ACCESS_SECRET) {
-      throw new Error("JWT_ACCESS_SECRET is not configured");
-    }
+    const accessToken = generateAccessToken(user._id);
 
-    // Generate short-lived access token
-    const accessToken = jwt.sign(
-      { sub: user._id.toString() },
-      process.env.JWT_ACCESS_SECRET,
-      { expiresIn: "5m" }
-    );
-
-    // Generate a random refresh token
-    const refreshToken = crypto.randomBytes(64).toString("hex");
-
-    // Store only its SHA-256 hash
-    const refreshTokenHash = crypto
-      .createHash("sha256")
-      .update(refreshToken)
-      .digest("hex");
-
-    // Create browser session
-    await Session.create({
-      userId: user._id,
-      refreshTokenHash,
-    });
-
-    // Send refresh token as an HTTP-only browser-session cookie
-    res.cookie("sp_refresh", refreshToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "strict",
-      path: "/api/auth",
-    });
+    await createUserSession(user._id, res);
 
     return res.status(200).json({
       success: true,
@@ -227,11 +295,386 @@ router.post("/login", async (req, res) => {
   }
 });
 
+// --------------------------------------------------
+// POST /api/auth/google
+// GOOGLE SIGN-IN WITH ACCOUNT LINKING
+// --------------------------------------------------
 
-const hashRefreshToken = (token) =>
-  crypto.createHash("sha256").update(token).digest("hex");
+router.post("/google", async (req, res) => {
+  try {
+    // Validate Google token and optional existing password
+    const validation = z.object({
+      idToken: z.string().min(1, "Google ID token is required"),
+      linkingPassword: z.string().max(128).optional(),
+    }).safeParse(req.body);
 
+    if (!validation.success) {
+      return res.status(400).json({
+        success: false,
+        message: "Google ID token is required",
+      });
+    }
+
+    if (!process.env.GOOGLE_CLIENT_ID) {
+      console.error("GOOGLE_CLIENT_ID is not configured");
+
+      return res.status(500).json({
+        success: false,
+        message: "Google authentication is not configured",
+      });
+    }
+
+    // Verify the ID token with Google
+    let payload;
+
+    try {
+      const ticket = await googleClient.verifyIdToken({
+        idToken: validation.data.idToken,
+        audience: process.env.GOOGLE_CLIENT_ID,
+      });
+
+      payload = ticket.getPayload();
+
+    } catch (verificationError) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid or expired Google ID token",
+      });
+    }
+
+    // Verify Google account details
+    if (
+      !payload ||
+      !payload.sub ||
+      !payload.email ||
+      payload.email_verified !== true
+    ) {
+      return res.status(401).json({
+        success: false,
+        message: "Google account could not be verified",
+      });
+    }
+
+    const googleId = payload.sub;
+    const email = payload.email.toLowerCase();
+
+    const fullName = (payload.name || email.split("@")[0])
+      .trim()
+      .slice(0, 100);
+
+    // Find account already linked to this Google ID
+    let user = await User.findOne({ googleId });
+
+    if (!user) {
+      // Check whether the email already exists
+      user = await User.findOne({ email }).select("+passwordHash");
+
+      if (user) {
+        // Existing password account requires password verification
+        if (user.passwordHash) {
+          const linkingPassword = validation.data.linkingPassword;
+
+          // Ask frontend for the existing account password
+          if (!linkingPassword) {
+            return res.status(409).json({
+              success: false,
+              requiresPasswordLink: true,
+              message:
+                "An account already exists with this email. Enter your existing password to link Google login.",
+            });
+          }
+
+          // Verify the existing password using bcrypt
+          const passwordMatches = await bcrypt.compare(
+            linkingPassword,
+            user.passwordHash
+          );
+
+          if (!passwordMatches) {
+            return res.status(401).json({
+              success: false,
+              message: "Incorrect password. Please try again.",
+            });
+          }
+        }
+
+        // Link Google account to the existing user
+        user.googleId = googleId;
+        await user.save();
+
+      } else {
+        // Create a new Google student account
+        user = await User.create({
+          fullName,
+          email,
+          googleId,
+          passwordHash: null,
+        });
+      }
+    }
+
+    // Generate application access token
+    const accessToken = generateAccessToken(user._id);
+
+    // Create application refresh session
+    await createUserSession(user._id, res);
+
+    return res.status(200).json({
+      success: true,
+      message: "Google login successful",
+      accessToken,
+      user: {
+        id: user._id,
+        fullName: user.fullName,
+        email: user.email,
+      },
+    });
+
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        message: "This Google account or email is already registered",
+      });
+    }
+
+    console.error("Google authentication error:", error.message);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to complete Google authentication",
+    });
+  }
+});
+
+// --------------------------------------------------
+// POST /api/auth/google/oauth
+// GOOGLE OAUTH 2.0 AUTHORIZATION CODE FLOW
+// --------------------------------------------------
+
+router.post("/google/oauth", async (req, res) => {
+  try {
+    // Validate the popup request to help prevent CSRF
+    if (
+      req.get("X-Requested-With") !== "XMLHttpRequest" ||
+      req.get("Origin") !== process.env.CLIENT_ORIGIN
+    ) {
+      return res.status(403).json({
+        success: false,
+        message: "Invalid OAuth request origin",
+      });
+    }
+
+    const validation = z.object({
+      code: z.string().min(1, "Authorization code is required"),
+    }).safeParse(req.body);
+
+    if (!validation.success) {
+      return res.status(400).json({
+        success: false,
+        message: "Authorization code is required",
+      });
+    }
+
+    if (
+      !process.env.GOOGLE_CLIENT_ID ||
+      !process.env.GOOGLE_CLIENT_SECRET ||
+      !process.env.CLIENT_ORIGIN
+    ) {
+      return res.status(500).json({
+        success: false,
+        message: "Google OAuth is not configured",
+      });
+    }
+
+    // Exchange authorization code for Google tokens
+    let tokens;
+
+    try {
+      const tokenResponse = await googleOAuthClient.getToken({
+        code: validation.data.code,
+        redirect_uri: process.env.CLIENT_ORIGIN,
+      });
+
+      tokens = tokenResponse.tokens;
+    } catch (error) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid or expired Google authorization code",
+      });
+    }
+
+    if (!tokens.access_token) {
+      return res.status(401).json({
+        success: false,
+        message: "Google did not return an access token",
+      });
+    }
+
+    // Retrieve the authorized Google user's profile
+    const profileResponse = await axios.get(
+      "https://openidconnect.googleapis.com/v1/userinfo",
+      {
+        headers: {
+          Authorization: `Bearer ${tokens.access_token}`,
+        },
+      }
+    );
+
+    const profile = profileResponse.data;
+
+    if (
+      !profile.sub ||
+      !profile.email ||
+      profile.email_verified !== true
+    ) {
+      return res.status(401).json({
+        success: false,
+        message: "Google account could not be verified",
+      });
+    }
+
+    const googleId = profile.sub;
+    const email = profile.email.toLowerCase();
+
+    const fullName = (profile.name || email.split("@")[0])
+      .trim()
+      .slice(0, 100);
+
+    // Create/login/link the application account
+    const result = await completeGoogleOAuthLogin(
+      {
+        googleId,
+        email,
+        fullName,
+      },
+      res
+    );
+
+    // Existing password account requires verification
+    if (result.requiresPasswordLink) {
+      const pendingGoogleLinkToken = jwt.sign(
+        {
+          googleId,
+          email,
+          fullName,
+          purpose: "google-account-link",
+        },
+        process.env.JWT_ACCESS_SECRET,
+        { expiresIn: "5m" }
+      );
+
+      return res.status(409).json({
+        success: false,
+        requiresPasswordLink: true,
+        pendingGoogleLinkToken,
+        message: "Enter your existing password to link Google login",
+      });
+    }
+
+    // Return the app session and development-only Google token
+    return res.status(200).json({
+      ...result,
+
+      // Only for local Postman demonstration.
+      // Never expose Google access tokens in production.
+      ...(process.env.NODE_ENV !== "production"
+        ? { googleAccessTokenForDemo: tokens.access_token }
+        : {}),
+    });
+
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        message: "This Google account or email is already registered",
+      });
+    }
+
+    console.error("Google OAuth error:", error.message);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to complete Google OAuth login",
+    });
+  }
+});
+
+
+// --------------------------------------------------
+// POST /api/auth/google/oauth/link
+// VERIFY PASSWORD AND LINK EXISTING ACCOUNT
+// --------------------------------------------------
+
+router.post("/google/oauth/link", async (req, res) => {
+  try {
+    const validation = z.object({
+      pendingGoogleLinkToken: z.string().min(1),
+      linkingPassword: z.string().min(1).max(128),
+    }).safeParse(req.body);
+
+    if (!validation.success) {
+      return res.status(400).json({
+        success: false,
+        message: "Pending token and password are required",
+      });
+    }
+
+    const decoded = jwt.verify(
+      validation.data.pendingGoogleLinkToken,
+      process.env.JWT_ACCESS_SECRET
+    );
+
+    if (decoded.purpose !== "google-account-link") {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid account-linking token",
+      });
+    }
+
+    const result = await completeGoogleOAuthLogin(
+      {
+        googleId: decoded.googleId,
+        email: decoded.email,
+        fullName: decoded.fullName,
+        linkingPassword: validation.data.linkingPassword,
+      },
+      res
+    );
+
+    if (result.invalidPassword) {
+      return res.status(401).json({
+        success: false,
+        message: "Incorrect password. Please try again.",
+      });
+    }
+
+    return res.status(200).json(result);
+
+  } catch (error) {
+    if (
+      error.name === "TokenExpiredError" ||
+      error.name === "JsonWebTokenError"
+    ) {
+      return res.status(401).json({
+        success: false,
+        message: "Account-linking session expired. Please try Google login again.",
+      });
+    }
+
+    console.error("Google account linking error:", error.message);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to link Google account",
+    });
+  }
+});
+
+// --------------------------------------------------
 // POST /api/auth/refresh
+// --------------------------------------------------
+
 router.post("/refresh", async (req, res) => {
   try {
     const oldToken = req.cookies?.sp_refresh;
@@ -245,7 +688,6 @@ router.post("/refresh", async (req, res) => {
 
     const oldHash = hashRefreshToken(oldToken);
 
-    // Find and atomically rotate the existing session token
     const newRefreshToken = crypto.randomBytes(64).toString("hex");
     const newHash = hashRefreshToken(newRefreshToken);
 
@@ -274,11 +716,7 @@ router.post("/refresh", async (req, res) => {
       });
     }
 
-    const accessToken = jwt.sign(
-      { sub: session.userId.toString() },
-      process.env.JWT_ACCESS_SECRET,
-      { expiresIn: "5m" }
-    );
+    const accessToken = generateAccessToken(session.userId);
 
     res.cookie("sp_refresh", newRefreshToken, {
       httpOnly: true,
@@ -303,7 +741,10 @@ router.post("/refresh", async (req, res) => {
   }
 });
 
+// --------------------------------------------------
 // POST /api/auth/logout
+// --------------------------------------------------
+
 router.post("/logout", async (req, res) => {
   try {
     const refreshToken = req.cookies?.sp_refresh;
@@ -344,7 +785,10 @@ router.post("/logout", async (req, res) => {
   }
 });
 
+// --------------------------------------------------
 // GET /api/auth/me
+// --------------------------------------------------
+
 router.get("/me", authMiddleware, async (req, res) => {
   try {
     const user = await User.findById(req.userId).select(
@@ -367,6 +811,7 @@ router.get("/me", authMiddleware, async (req, res) => {
         createdAt: user.createdAt,
       },
     });
+
   } catch (error) {
     console.error("Profile error:", error.message);
 
@@ -376,4 +821,5 @@ router.get("/me", authMiddleware, async (req, res) => {
     });
   }
 });
+
 module.exports = router;
