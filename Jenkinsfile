@@ -47,6 +47,14 @@ pipeline {
                 echo 'Docker images built successfully!'
             }
         }
+
+        stage('Deploy Application') {
+            steps {
+                echo 'Deploying application using Docker Compose...'
+                bat 'docker compose --env-file frontend/.env up -d'
+                echo 'Application deployment command completed!'
+            }
+        }
     }
 
     post {
