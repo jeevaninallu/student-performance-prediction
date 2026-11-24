@@ -7,22 +7,35 @@ pipeline {
             steps {
                 echo 'Checking project source code...'
                 bat 'git rev-parse --show-toplevel'
-                echo 'Source code checkout successful!'
             }
         }
 
         stage('Verify Docker') {
             steps {
-                echo 'Checking Docker installation...'
                 bat 'docker --version'
                 bat 'docker compose version'
-                echo 'Docker verification completed!'
+            }
+        }
+
+        stage('Prepare Environment Files') {
+            steps {
+                withCredentials([
+                    file(credentialsId: 'frontend-env', variable: 'FRONTEND_ENV'),
+                    file(credentialsId: 'backend-env', variable: 'BACKEND_ENV'),
+                    file(credentialsId: 'ml-service-env', variable: 'ML_ENV')
+                ]) {
+                    bat '''
+                        copy /Y "%FRONTEND_ENV%" "frontend\\.env"
+                        copy /Y "%BACKEND_ENV%" "backend\\.env"
+                        copy /Y "%ML_ENV%" "ml_service\\.env"
+                    '''
+                }
+                echo 'Environment files prepared.'
             }
         }
 
         stage('Validate Docker Compose') {
             steps {
-                echo 'Validating Docker Compose configuration...'
                 bat 'docker compose --env-file frontend/.env config --quiet'
                 echo 'Docker Compose configuration is valid!'
             }
@@ -30,10 +43,20 @@ pipeline {
 
         stage('Build Docker Images') {
             steps {
-                echo 'Building application Docker images...'
                 bat 'docker compose --env-file frontend/.env build'
                 echo 'Docker images built successfully!'
             }
+        }
+    }
+
+    post {
+        always {
+            bat '''
+                if exist frontend\\.env del /Q frontend\\.env
+                if exist backend\\.env del /Q backend\\.env
+                if exist ml_service\\.env del /Q ml_service\\.env
+            '''
+            echo 'Temporary environment files cleaned up.'
         }
     }
 }
