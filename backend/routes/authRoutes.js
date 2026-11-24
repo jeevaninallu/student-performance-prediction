@@ -822,4 +822,99 @@ router.get("/me", authMiddleware, async (req, res) => {
   }
 });
 
+
+// --------------------------------------------------
+// PUT /api/auth/profile
+// UPDATE LOGGED-IN STUDENT PROFILE
+// --------------------------------------------------
+
+const updateProfileSchema = z.object({
+  fullName: z.string()
+    .trim()
+    .min(2, "Full name must contain at least 2 characters")
+    .max(100, "Full name is too long"),
+
+  email: z.string()
+    .trim()
+    .email("Enter a valid email address")
+    .max(254)
+    .transform((value) => value.toLowerCase()),
+}).strict();
+
+router.put("/profile", authMiddleware, async (req, res) => {
+  try {
+    // 1. Validate incoming profile details
+    const validation = updateProfileSchema.safeParse(req.body);
+
+    if (!validation.success) {
+      return res.status(400).json({
+        success: false,
+        message: "Please provide valid profile details",
+        errors: validation.error.issues.map((issue) => ({
+          field: issue.path.join("."),
+          message: issue.message,
+        })),
+      });
+    }
+
+    const { fullName, email } = validation.data;
+
+    // 2. Find the authenticated student
+    const user = await User.findById(req.userId);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User account not found",
+      });
+    }
+
+    // 3. Check whether another account uses this email
+    const existingUser = await User.findOne({
+      email,
+      _id: { $ne: user._id },
+    });
+
+    if (existingUser) {
+      return res.status(409).json({
+        success: false,
+        message: "This email is already registered",
+      });
+    }
+
+    // 4. Update permitted profile fields only
+    user.fullName = fullName;
+    user.email = email;
+
+    await user.save();
+
+    // 5. Return updated profile
+    return res.status(200).json({
+      success: true,
+      message: "Profile updated successfully",
+      user: {
+        id: user._id,
+        fullName: user.fullName,
+        email: user.email,
+      },
+    });
+
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        message: "This email is already registered",
+      });
+    }
+
+    console.error("Profile update error:", error.message);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to update profile",
+    });
+  }
+});
+
+
 module.exports = router;

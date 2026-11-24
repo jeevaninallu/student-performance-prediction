@@ -4,13 +4,15 @@ const axios = require("axios");
 const { z } = require("zod");
 const mongoose = require("mongoose");
 
-
 const authMiddleware = require("../middleware/authMiddleware");
 const Prediction = require("../models/Prediction");
 
 const router = express.Router();
 
-// Validate the 19 features expected by the ML models
+// ==========================================
+// 1. VALIDATION SCHEMA
+// ==========================================
+
 const predictionSchema = z.object({
   Hours_Studied: z.number().finite().min(0),
   Attendance: z.number().finite().min(0).max(100),
@@ -38,8 +40,28 @@ const predictionSchema = z.object({
 }).strict();
 
 
+// ==========================================
+// 2. GET - DETAILED ANALYTICS
 // GET /api/predictions/analytics
-// Get analytics for the logged-in student only
+// ==========================================
+
+/**
+ * @swagger
+ * /api/predictions/analytics:
+ *   get:
+ *     summary: Get detailed prediction analytics
+ *     description: Retrieves summary, classification distribution, score distribution, monthly statistics and recent predictions for the logged-in student.
+ *     tags: [Predictions]
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Analytics retrieved successfully
+ *       401:
+ *         description: Authentication required
+ *       500:
+ *         description: Unable to retrieve analytics
+ */
 
 router.get("/analytics", authMiddleware, async (req, res) => {
   try {
@@ -50,10 +72,9 @@ router.get("/analytics", authMiddleware, async (req, res) => {
       classificationStats,
       scoreDistribution,
       monthlyStats,
-      recentPredictions
+      recentPredictions,
     ] = await Promise.all([
-
-      // 1. Total predictions and average predicted score
+      // Total, average, highest and lowest scores
       Prediction.aggregate([
         { $match: { userId } },
         {
@@ -62,23 +83,23 @@ router.get("/analytics", authMiddleware, async (req, res) => {
             totalPredictions: { $sum: 1 },
             averageScore: { $avg: "$predictedScore" },
             highestScore: { $max: "$predictedScore" },
-            lowestScore: { $min: "$predictedScore" }
-          }
-        }
+            lowestScore: { $min: "$predictedScore" },
+          },
+        },
       ]),
 
-      // 2. Classification distribution
+      // Classification distribution
       Prediction.aggregate([
         { $match: { userId } },
         {
           $group: {
             _id: "$classification",
-            count: { $sum: 1 }
-          }
-        }
+            count: { $sum: 1 },
+          },
+        },
       ]),
 
-      // 3. Predicted score distribution
+      // Score distribution
       Prediction.aggregate([
         { $match: { userId } },
         {
@@ -87,34 +108,44 @@ router.get("/analytics", authMiddleware, async (req, res) => {
             boundaries: [0, 50, 60, 70, 80, 90, 101],
             default: "Other",
             output: {
-              count: { $sum: 1 }
-            }
-          }
-        }
+              count: { $sum: 1 },
+            },
+          },
+        },
       ]),
 
-      // 4. Monthly average predicted score
+      // Monthly prediction statistics
       Prediction.aggregate([
         { $match: { userId } },
         {
           $group: {
             _id: {
-              year: { $year: "$createdAt" },
-              month: { $month: "$createdAt" }
+              year: {
+                $year: {
+                  date: "$createdAt",
+                  timezone: "Asia/Kolkata",
+                },
+              },
+              month: {
+                $month: {
+                  date: "$createdAt",
+                  timezone: "Asia/Kolkata",
+                },
+              },
             },
             averageScore: { $avg: "$predictedScore" },
-            totalPredictions: { $sum: 1 }
-          }
+            totalPredictions: { $sum: 1 },
+          },
         },
-        { $sort: { "_id.year": 1, "_id.month": 1 } }
+        { $sort: { "_id.year": 1, "_id.month": 1 } },
       ]),
 
-      // 5. Latest 30 predictions for score trend
+      // Latest 30 predictions
       Prediction.find({ userId })
         .select("predictedScore classification createdAt")
         .sort({ createdAt: -1 })
         .limit(30)
-        .lean()
+        .lean(),
     ]);
 
     const distributionLabels = {
@@ -123,16 +154,15 @@ router.get("/analytics", authMiddleware, async (req, res) => {
       60: "60–69",
       70: "70–79",
       80: "80–89",
-      90: "90–100"
+      90: "90–100",
     };
 
     const scoreRanges = [0, 50, 60, 70, 80, 90];
 
     const formattedDistribution = scoreRanges.map((range) => ({
       range: distributionLabels[range],
-      count: scoreDistribution.find(
-        (item) => item._id === range
-      )?.count || 0
+      count:
+        scoreDistribution.find((item) => item._id === range)?.count || 0,
     }));
 
     return res.status(200).json({
@@ -142,32 +172,177 @@ router.get("/analytics", authMiddleware, async (req, res) => {
         totalPredictions: 0,
         averageScore: 0,
         highestScore: 0,
-        lowestScore: 0
+        lowestScore: 0,
       },
 
       classificationStats,
-
       scoreDistribution: formattedDistribution,
-
       monthlyStats,
-
-      recentPredictions: recentPredictions.reverse()
+      recentPredictions: recentPredictions.reverse(),
     });
-
   } catch (error) {
     console.error("Analytics error:", error.message);
 
     return res.status(500).json({
       success: false,
-      message: "Unable to retrieve analytics."
+      message: "Unable to retrieve analytics.",
     });
   }
 });
 
 
+// ==========================================
+// 3. GET - ALTERNATIVE ANALYTICS SUMMARY
+// GET /api/predictions/analytics/summary
+// ==========================================
 
+/**
+ * @swagger
+ * /api/predictions/analytics/summary:
+ *   get:
+ *     summary: Get prediction analytics summary
+ *     description: Returns total predictions, average score, classification distribution, score distribution and monthly statistics.
+ *     tags: [Predictions]
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Analytics summary retrieved successfully
+ *       401:
+ *         description: Authentication required
+ *       500:
+ *         description: Unable to retrieve analytics
+ */
+
+router.get("/analytics/summary", authMiddleware, async (req, res) => {
+  try {
+    const userId = new mongoose.Types.ObjectId(req.userId);
+
+    const [
+      totalPredictions,
+      averageResult,
+      classificationStats,
+      scoreDistribution,
+      monthlyStats,
+    ] = await Promise.all([
+      // Total predictions
+      Prediction.countDocuments({ userId }),
+
+      // Average predicted score
+      Prediction.aggregate([
+        { $match: { userId } },
+        {
+          $group: {
+            _id: null,
+            averageScore: { $avg: "$predictedScore" },
+          },
+        },
+      ]),
+
+      // Classification distribution
+      Prediction.aggregate([
+        { $match: { userId } },
+        {
+          $group: {
+            _id: "$classification",
+            count: { $sum: 1 },
+          },
+        },
+      ]),
+
+      // Score distribution
+      Prediction.aggregate([
+        { $match: { userId } },
+        {
+          $bucket: {
+            groupBy: "$predictedScore",
+            boundaries: [0, 40, 50, 60, 70, 80, 90, 101],
+            default: "Other",
+            output: {
+              count: { $sum: 1 },
+            },
+          },
+        },
+      ]),
+
+      // Monthly average predicted score
+      Prediction.aggregate([
+        { $match: { userId } },
+        {
+          $group: {
+            _id: {
+              year: {
+                $year: {
+                  date: "$createdAt",
+                  timezone: "Asia/Kolkata",
+                },
+              },
+              month: {
+                $month: {
+                  date: "$createdAt",
+                  timezone: "Asia/Kolkata",
+                },
+              },
+            },
+            averageScore: { $avg: "$predictedScore" },
+            totalPredictions: { $sum: 1 },
+          },
+        },
+        { $sort: { "_id.year": 1, "_id.month": 1 } },
+      ]),
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      analytics: {
+        totalPredictions,
+        averagePredictedScore: averageResult[0]?.averageScore || 0,
+        classificationStats,
+        scoreDistribution,
+        monthlyStats,
+      },
+    });
+  } catch (error) {
+    console.error("Analytics summary error:", error.message);
+
+    return res.status(500).json({
+      success: false,
+      message: "Unable to retrieve analytics.",
+    });
+  }
+});
+
+
+// ==========================================
+// 4. GET - PREDICTION HISTORY
 // GET /api/predictions
-// Retrieve only the logged-in student's prediction history
+// ==========================================
+
+/**
+ * @swagger
+ * /api/predictions:
+ *   get:
+ *     summary: Get prediction history
+ *     description: Retrieves paginated predictions belonging to the logged-in student.
+ *     tags: [Predictions]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *         description: Page number
+ *     responses:
+ *       200:
+ *         description: Prediction history retrieved successfully
+ *       401:
+ *         description: Authentication required
+ *       500:
+ *         description: Unable to retrieve prediction history
+ */
+
 router.get("/", authMiddleware, async (req, res) => {
   try {
     const page = Math.max(1, Number(req.query.page) || 1);
@@ -206,103 +381,118 @@ router.get("/", authMiddleware, async (req, res) => {
 });
 
 
-// GET /api/predictions/analytics
-// Analytics for the currently logged-in student
-
-router.get("/analytics", authMiddleware, async (req, res) => {
-  try {
-    const userId = req.userId;
-
-    const [
-      totalPredictions,
-      averageResult,
-      classificationStats,
-      scoreDistribution,
-      monthlyStats,
-    ] = await Promise.all([
-      // Total predictions
-      Prediction.countDocuments({ userId }),
-
-      // Average predicted score
-      Prediction.aggregate([
-        { $match: { userId: new mongoose.Types.ObjectId(userId) } },
-        {
-          $group: {
-            _id: null,
-            averageScore: { $avg: "$predictedScore" },
-          },
-        },
-      ]),
-
-      // Classification distribution
-      Prediction.aggregate([
-        { $match: { userId: new mongoose.Types.ObjectId(userId) } },
-        {
-          $group: {
-            _id: "$classification",
-            count: { $sum: 1 },
-          },
-        },
-      ]),
-
-      // Score distribution
-      Prediction.aggregate([
-        { $match: { userId: new mongoose.Types.ObjectId(userId) } },
-        {
-          $bucket: {
-            groupBy: "$predictedScore",
-            boundaries: [0, 40, 50, 60, 70, 80, 90, 101],
-            default: "Other",
-            output: {
-              count: { $sum: 1 },
-            },
-          },
-        },
-      ]),
-
-      // Monthly average predicted score
-      Prediction.aggregate([
-        { $match: { userId: new mongoose.Types.ObjectId(userId) } },
-        {
-          $group: {
-            _id: {
-              year: { $year: { date: "$createdAt", timezone: "Asia/Kolkata" } },
-              month: { $month: { date: "$createdAt", timezone: "Asia/Kolkata" } },
-            },
-            averageScore: { $avg: "$predictedScore" },
-            totalPredictions: { $sum: 1 },
-          },
-        },
-        { $sort: { "_id.year": 1, "_id.month": 1 } },
-      ]),
-    ]);
-
-    return res.status(200).json({
-      success: true,
-      analytics: {
-        totalPredictions,
-        averagePredictedScore: averageResult[0]?.averageScore || 0,
-        classificationStats,
-        scoreDistribution,
-        monthlyStats,
-      },
-    });
-  } catch (error) {
-    console.error("Analytics error:", error.message);
-
-    return res.status(500).json({
-      success: false,
-      message: "Unable to retrieve analytics.",
-    });
-  }
-});
-
-
-
+// ==========================================
+// 5. POST - GENERATE PREDICTION
 // POST /api/predictions
+// ==========================================
+
+/**
+ * @swagger
+ * /api/predictions:
+ *   post:
+ *     summary: Generate student performance prediction
+ *     description: Validates student information, sends it to the Flask ML service and saves the prediction for the authenticated student.
+ *     tags: [Predictions]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - Hours_Studied
+ *               - Attendance
+ *               - Parental_Involvement
+ *               - Access_to_Resources
+ *               - Extracurricular_Activities
+ *               - Sleep_Hours
+ *               - Previous_Scores
+ *               - Motivation_Level
+ *               - Internet_Access
+ *               - Tutoring_Sessions
+ *               - Family_Income
+ *               - Teacher_Quality
+ *               - School_Type
+ *               - Peer_Influence
+ *               - Physical_Activity
+ *               - Learning_Disabilities
+ *               - Parental_Education_Level
+ *               - Distance_from_Home
+ *               - Gender
+ *             properties:
+ *               Hours_Studied:
+ *                 type: number
+ *                 example: 5
+ *               Attendance:
+ *                 type: number
+ *                 example: 85
+ *               Parental_Involvement:
+ *                 type: string
+ *                 enum: [Low, Medium, High]
+ *               Access_to_Resources:
+ *                 type: string
+ *                 enum: [Low, Medium, High]
+ *               Extracurricular_Activities:
+ *                 type: string
+ *                 enum: [Yes, No]
+ *               Sleep_Hours:
+ *                 type: number
+ *                 example: 7
+ *               Previous_Scores:
+ *                 type: number
+ *                 example: 75
+ *               Motivation_Level:
+ *                 type: string
+ *                 enum: [Low, Medium, High]
+ *               Internet_Access:
+ *                 type: string
+ *                 enum: [Yes, No]
+ *               Tutoring_Sessions:
+ *                 type: number
+ *                 example: 2
+ *               Family_Income:
+ *                 type: string
+ *                 enum: [Low, Medium, High]
+ *               Teacher_Quality:
+ *                 type: string
+ *                 enum: [Low, Medium, High]
+ *               School_Type:
+ *                 type: string
+ *                 enum: [Public, Private]
+ *               Peer_Influence:
+ *                 type: string
+ *                 enum: [Positive, Neutral, Negative]
+ *               Physical_Activity:
+ *                 type: number
+ *                 example: 3
+ *               Learning_Disabilities:
+ *                 type: string
+ *                 enum: [Yes, No]
+ *               Parental_Education_Level:
+ *                 type: string
+ *                 enum: [High School, College, Postgraduate]
+ *               Distance_from_Home:
+ *                 type: string
+ *                 enum: [Near, Moderate, Far]
+ *               Gender:
+ *                 type: string
+ *                 enum: [Male, Female]
+ *     responses:
+ *       201:
+ *         description: Prediction generated successfully
+ *       400:
+ *         description: Invalid prediction input
+ *       401:
+ *         description: Authentication required
+ *       502:
+ *         description: Prediction service error
+ */
+
 router.post("/", authMiddleware, async (req, res) => {
   try {
-    // 1. Validate the incoming student data
+    // 1. Validate student input
     const validation = predictionSchema.safeParse(req.body);
 
     if (!validation.success) {
@@ -316,7 +506,7 @@ router.post("/", authMiddleware, async (req, res) => {
       });
     }
 
-    // 2. Send validated data to the Flask ML service
+    // 2. Send validated data to Flask ML service
     const mlResponse = await axios.post(
       `${process.env.ML_SERVICE_URL}/predict`,
       validation.data,
@@ -330,7 +520,7 @@ router.post("/", authMiddleware, async (req, res) => {
 
     const { predicted_score, classification } = mlResponse.data;
 
-    // 3. Validate the ML service response
+    // 3. Validate ML response
     if (
       typeof predicted_score !== "number" ||
       !Number.isFinite(predicted_score) ||
@@ -342,15 +532,14 @@ router.post("/", authMiddleware, async (req, res) => {
       });
     }
 
-    // 4. Save only the prediction result
-    // User ID comes from the verified JWT, never from the request body.
+    // 4. Save prediction in MongoDB
     const prediction = await Prediction.create({
       userId: req.userId,
       predictedScore: predicted_score,
       classification,
     });
 
-    // 5. Return the prediction result
+    // 5. Return prediction result
     return res.status(201).json({
       success: true,
       message: "Prediction generated successfully",
@@ -363,7 +552,10 @@ router.post("/", authMiddleware, async (req, res) => {
     });
   } catch (error) {
     if (error.response) {
-      console.error("ML service returned an error:", error.response.status);
+      console.error(
+        "ML service returned an error:",
+        error.response.status
+      );
     } else if (error.code === "ECONNABORTED") {
       console.error("ML service request timed out");
     } else {
