@@ -7,12 +7,15 @@ const cors = require("cors");
 const helmet = require("helmet");
 const cookieParser = require("cookie-parser");
 
+const swaggerUi = require("swagger-ui-express");
+const swaggerSpec = require("./swagger");
+
 const authRoutes = require("./routes/authRoutes");
 const predictionRoutes = require("./routes/predictionRoutes");
 
 const app = express();
 
-// Security and middleware
+// 1. Security middleware
 app.use(helmet());
 
 app.use(
@@ -22,16 +25,24 @@ app.use(
   })
 );
 
+// 2. Body parsing and cookie middleware
 app.use(express.json({ limit: "10kb" }));
 app.use(cookieParser());
 
-// Authentication routes
+// 3. Swagger API Documentation
+app.use(
+  "/api-docs",
+  swaggerUi.serve,
+  swaggerUi.setup(swaggerSpec)
+);
+
+// 4. Authentication routes
 app.use("/api/auth", authRoutes);
 
-// Prediction routes
+// 5. Prediction routes
 app.use("/api/predictions", predictionRoutes);
 
-// Health check endpoint
+// 6. Health check endpoint
 app.get("/api/health", (req, res) => {
   res.status(200).json({
     success: true,
@@ -43,7 +54,7 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-// Start backend server
+// 7. Start backend server
 const PORT = process.env.PORT || 5000;
 
 async function startServer() {
@@ -54,6 +65,7 @@ async function startServer() {
 
     app.listen(PORT, () => {
       console.log(`Backend server running at http://localhost:${PORT}`);
+      console.log(`Swagger documentation: http://localhost:${PORT}/api-docs`);
     });
   } catch (error) {
     console.error("Server startup failed:", error.message);
@@ -61,8 +73,8 @@ async function startServer() {
   }
 }
 
-// Start server only when this file is executed directly.
-// Importing it in Jest will not start another server.
+// 8. Start server only when this file is executed directly
+// Prevents Jest from starting another server when importing the app.
 if (require.main === module) {
   startServer();
 }
